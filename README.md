@@ -1,7 +1,6 @@
-# Campus Events: Week 10 Relational Data Model & Queries
+# Campus Events: Week 11 Optimized & Advanced Queries
 
-Laravel + PostgreSQL data layer for a small Campus Events system.
-Venues host events, participants register for events, and notes can be attached to either an event or a venue.
+Laravel + PostgreSQL. This continues the Week 10 Campus Events project with enough data to measure real query performance.
 
 **Author:** Ysthan Gabriel E. Colarina, BSIT 3
 
@@ -12,47 +11,63 @@ composer install
 cp .env.example .env        # then set the DB_* values for PostgreSQL
 php artisan key:generate
 php artisan migrate:fresh --seed
-php artisan serve           # open http://127.0.0.1:8000/report
+php artisan serve
 ```
 
-## Tables
+## Pages
 
-| Table | Primary key | Foreign keys |
-|---|---|---|
-| `venues` | `id` | none |
-| `events` | `id` | `venue_id` → `venues.id` |
-| `participants` | `id` | none |
-| `event_participant` (pivot) | `id` | `event_id` → `events.id`, `participant_id` → `participants.id` (unique together) |
-| `notes` | `id` | none (polymorphic `notable_type` + `notable_id`) |
-
-## Relationships
-
-| Link | Type | Model holding the foreign key | Relationship methods | ON DELETE | Reason |
-|---|---|---|---|---|---|
-| Venue ↔ Event | One-to-many | `Event` (`events.venue_id`) | `Venue::events()` hasMany, `Event::venue()` belongsTo | `RESTRICT` | A venue that still has events must not be deletable. |
-| Event ↔ Participant | Many-to-many | Pivot table `event_participant` (`event_id`, `participant_id`, plus `status`) | `Event::participants()` belongsToMany, `Participant::events()` belongsToMany | `CASCADE` (both keys) | When an event or a participant is deleted, its registrations must disappear too. |
-| Note → Event / Venue | Polymorphic one-to-many | `Note` (`notes.notable_type` + `notes.notable_id`) | `Event::notes()` morphMany, `Venue::notes()` morphMany, `Note::notable()` morphTo | None (no FK possible) | `notable_id` can point to two different tables, so PostgreSQL cannot enforce it; the application code keeps it valid. |
-
-Other rules enforced by the database:
-- `UNIQUE (event_id, participant_id)` on `event_participant`: the same participant cannot register for the same event twice.
-- `CHECK (status IN ('registered', 'waitlisted'))` on `event_participant.status`.
-
-## Report page
-
-`GET /report` (`ReportController@index`, view `resources/views/report.blade.php`) shows seven labeled queries, all written with Eloquent relationships:
-
-1. Every venue with the number of events it hosts (`withCount('events')`)
-2. All events at one chosen venue (`$venue->events`)
-3. All participants of one chosen event with their status (`$event->participants`, pivot `status`)
-4. All events one chosen participant has joined (`$participant->events`)
-5. All events with at least one waitlisted participant (`whereHas('participants', ...)`)
-6. All notes of one chosen event and of one chosen venue (`$event->notes`, `$venue->notes`)
-7. For one chosen note, the name and kind of the thing it belongs to (`$note->notable`)
+| Address | What it shows |
+|---|---|
+| `/events` | The first 50 events with title, venue, participant count, and a query count |
+| `/events?dress_code=formal&form=arrow` | Events filtered with the JSONB arrow form, with its SQL |
+| `/events?dress_code=formal&form=contains` | Events filtered with JSONB containment, with its SQL |
+| `/events/search?q=hackathon` | Full-text search on `description`, up to 50 results, with its SQL |
 
 ## Seeded data
 
-`php artisan migrate:fresh --seed` creates 3 venues, 6 events, 10 participants, 17 registrations (14 registered, 3 waitlisted) and 6 notes (3 on events, 3 on venues).
+`php artisan migrate:fresh --seed` creates 20,006 events across 3 venues, 210 participants, and registrations for the first 100 events. Rows are inserted in chunks.
 
-## Proof SQL
+Rare values used for selective queries:
+- The word `hackathon` appears in the description of 133 events (under 1%).
+- The value `formal` for `details->dress_code` appears in 118 events (under 1%).
 
-See `docs/proofs.sql` for the raw SQL used for Steps 7 to 9 (database-enforced errors, the accepted orphan note, and the cascade cleanup).
+## Local scopes (`app/Models/Event.php`)
+
+| Scope | Parameter | What it does |
+|---|---|---|
+| `soonestFirst()` | None | Sorts events by `starts_at`, earliest first |
+| `startingFrom($date)` | Date | Keeps events on or after the given date |
+| `dressCodeArrow($dressCode)` | Dress code | Filters with `where('details->dress_code', ...)` |
+| `dressCodeContains($dressCode)` | Dress code | Filters with `whereJsonContains` on the whole `details` column |
+
+`EventController@index` chains `startingFrom('2026-01-01')->soonestFirst()` in one query.
+
+## Step 4: N+1 query counts
+
+| Version | Queries for 50 events |
+|---|---|
+| Naive (lazy loading) | 101 |
+| Fixed (`with('venue')` and `withCount('participants')`) | 2 |
+
+The naive page ran 1 query for the events, then 1 query per event for its venue and 1 more for its participants, which made 101 queries for 50 events. The fixed page loads all the venues in one extra query and gets the participant counts as part of the events query, so the number of queries stays at 2 no matter how many events are listed.
+
+## Step 5 and 6: SQL generated by Laravel
+
+| Query | `toSql()` output |
+|---|---|
+| Q1 JSONB arrow | `select * from "events" where "details"->>'dress_code' = ?` |
+| Q2 JSONB containment | `select * from "events" where ("details")::jsonb @> ?` |
+| Q3 Full-text | `select * from "events" where (to_tsvector('english', "description")) @@ plainto_tsquery('english', ?)` |
+
+## Step 7: query plans
+
+Queries used the rare values `formal` and `hackathon`, and were run with `EXPLAIN (ANALYZE)` on 20,006 events.
+
+| Case | Query | Index that exists | Plan type | Execution time |
+|---|---|---|---|---|
+| 1. No index | Q1 Arrow | None | Seq Scan | 10.568 ms |
+| 1. No index | Q2 Containment | None | Seq Scan | 11.871 ms |
+| 1. No index | Q3 Full-text | None | Seq Scan | 251.439 ms |
+| 2. Best index | Q1 Arrow | `events_details_dress_code_index` (B-tree expression) | Bitmap Index Scan | 0.184 ms |
+| 2. Best index | Q2 Containment | `events_details_gin_index` (GIN `jsonb_path_ops`) | Bitmap Index Scan | 0.296 ms |
+| 2. Best index | Q3 Full-text | `events_description_fulltext` (GIN) | Bitmap Index Scan |
