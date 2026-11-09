@@ -34,6 +34,18 @@ class Event extends Model
         return $query->where('starts_at', '>=', $date);
     }
 
+    // JSONB filter, arrow form: read one key as text and compare it.
+    public function scopeDressCodeArrow(Builder $query, string $dressCode): Builder
+    {
+        return $query->where('details->dress_code', $dressCode);
+    }
+
+    // JSONB filter, containment form: does the whole column contain this piece of JSON?
+    public function scopeDressCodeContains(Builder $query, string $dressCode): Builder
+    {
+        return $query->whereJsonContains('details', ['dress_code' => $dressCode]);
+    }
+
     // Inverse of one-to-many: an event happens at one venue.
     public function venue(): BelongsTo
     {
