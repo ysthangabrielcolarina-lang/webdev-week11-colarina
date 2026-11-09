@@ -12,10 +12,11 @@ class EventController extends Controller
         // Start recording every SQL query from this point on.
         DB::enableQueryLog();
 
-        // NAIVE VERSION: venue and participants are not loaded here,
-        // so the view triggers extra queries for every event.
+        // FIXED VERSION: two chained scopes, plus eager loading and a count.
         $events = Event::startingFrom('2026-01-01')
             ->soonestFirst()
+            ->with('venue')
+            ->withCount('participants')
             ->limit(50)
             ->get();
 
