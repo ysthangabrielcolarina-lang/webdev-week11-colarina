@@ -65,9 +65,20 @@ Queries used the rare values `formal` and `hackathon`, and were run with `EXPLAI
 
 | Case | Query | Index that exists | Plan type | Execution time |
 |---|---|---|---|---|
-| 1. No index | Q1 Arrow | None | Seq Scan | 10.568 ms |
-| 1. No index | Q2 Containment | None | Seq Scan | 11.871 ms |
-| 1. No index | Q3 Full-text | None | Seq Scan | 251.439 ms |
-| 2. Best index | Q1 Arrow | `events_details_dress_code_index` (B-tree expression) | Bitmap Index Scan | 0.184 ms |
-| 2. Best index | Q2 Containment | `events_details_gin_index` (GIN `jsonb_path_ops`) | Bitmap Index Scan | 0.296 ms |
-| 2. Best index | Q3 Full-text | `events_description_fulltext` (GIN) | Bitmap Index Scan |
+| 1. No index | Q1 Arrow | None | Seq Scan | 2.520 ms |
+| 1. No index | Q2 Containment | None | Seq Scan | 3.880 ms |
+| 1. No index | Q3 Full-text | None | Seq Scan | 191.482 ms |
+| 2. Best index | Q1 Arrow | `events_details_dress_code_index` (B-tree expression) | Bitmap Index Scan | 0.135 ms |
+| 2. Best index | Q2 Containment | `events_details_gin_index` (GIN `jsonb_path_ops`) | Bitmap Index Scan | 0.220 ms |
+| 2. Best index | Q3 Full-text | `events_description_fulltext` (GIN) | Bitmap Index Scan | 0.137 ms |
+| 3. Index not used | Q1 Arrow | `events_details_gin_index` (GIN `jsonb_path_ops`, exists on `details` but not used) | Seq Scan | 2.661 ms |
+
+**Why the index in Case 3 was not used:** The GIN index with `jsonb_path_ops` only supports the `@>` operator, and the arrow query uses `->>` with `=`, so PostgreSQL cannot use it and falls back to a Seq Scan.
+
+## Step 8: keeping the indexes
+
+The `events_details_gin_index` index uses GIN with the `jsonb_path_ops` operator class, which Laravel's schema builder has no method for, so it is written with `DB::statement()` inside a migration. Keeping it in a migration matters because `php artisan migrate:fresh --seed` drops every table, so an index created by hand in pgAdmin would be lost, while one in a migration is rebuilt every time.
+
+## Step 9: choosing columns
+
+I stored `tags` in the JSONB `details` column because it is a list whose length can vary from event to event, and a normal column holds only one value, so it would need an extra table. I kept `starts_at` in a normal column because every event must have one and the app sorts and filters by it, so a real date type lets PostgreSQL reject invalid dates, compare them correctly, and enforce `NOT NULL`.
