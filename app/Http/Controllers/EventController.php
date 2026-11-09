@@ -42,4 +42,25 @@ class EventController extends Controller
 
         return view('events.index', compact('events', 'dressCode', 'form', 'filterSql', 'filterRawSql'));
     }
+
+    public function search(Request $request)
+    {
+        $q = trim((string) $request->query('q', ''));
+
+        $events = collect();
+        $sql = null;
+        $rawSql = null;
+
+        if ($q !== '') {
+            $query = Event::whereFullText('description', $q);
+
+            // Capture the SQL before the eager loading and limit are added.
+            $sql = $query->toSql();
+            $rawSql = $query->toRawSql();
+
+            $events = $query->with('venue')->limit(50)->get();
+        }
+
+        return view('events.search', compact('q', 'events', 'sql', 'rawSql'));
+    }
 }

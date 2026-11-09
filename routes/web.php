@@ -10,3 +10,4 @@ Route::redirect('/', '/report');
 Route::get('/report', [ReportController::class, 'index'])->name('report');
 
 Route::get('/events', [EventController::class, 'index'])->name('events.index');
+Route::get('/events/search', [EventController::class, 'search'])->name('events.search');
